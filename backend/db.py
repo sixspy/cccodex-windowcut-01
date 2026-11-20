@@ -41,6 +41,89 @@ def sha_password(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
+# ---- 封口分流册 ----------------------------------------------------------
+# 当天口径只能择一：旁路暂存（甲）或开始瞬间拒收（乙），写入后当天不得改口。
+SEAL_ROUTING_PATH = "hold_staging"
+SEAL_ROUTING_LABEL = "甲·旁路暂存"
+SEAL_ROUTING_PATHS = {
+    "hold_staging": SEAL_ROUTING_LABEL,
+    "reject_slips": "乙·开始瞬间拒收",
+}
+
+
+def _today() -> str:
+    from datetime import date
+
+    return date.today().isoformat()
+
+
+class SealRoutingDeviation(Exception):
+    """偏离封口分流册：写路径与当天册定口径不符。"""
+
+    def __init__(self, message: str, attempted: str):
+        super().__init__(message)
+        self.attempted = attempted
+
+
+def note_deviation(conn, actor: str, target: str | None, ledger, attempted: str, detail: str) -> None:
+    """偏离封口分流册：记「封口偏了」。调用方负责提交。"""
+    write_audit(
+        conn,
+        actor,
+        "封口偏了",
+        target,
+        {
+            "册定口径": ledger["path"] if ledger is not None else None,
+            "企图写入": attempted,
+            "说明": detail,
+        },
+    )
+
+
+def guard_seal_path(conn, actor: str, target: str | None, ledger, attempted: str, detail: str) -> None:
+    """写路径必须与当天册定口径一致；不符则记偏并抛，调用方回滚。"""
+    if ledger is None or ledger["path"] != attempted:
+        note_deviation(conn, actor, target, ledger, attempted, detail)
+        raise SealRoutingDeviation("偏离封口分流册：拒写并记封口偏了", attempted)
+
+
+def get_seal_routing(conn: sqlite3.Connection, biz_date: str | None = None) -> sqlite3.Row | None:
+    return conn.execute(
+        "SELECT * FROM seal_routing_ledger WHERE biz_date=?",
+        (biz_date or _today(),),
+    ).fetchone()
+
+
+def ensure_seal_routing(
+    conn: sqlite3.Connection, actor: str = "system", biz_date: str | None = None
+) -> sqlite3.Row:
+    """当天无决议则落默认口径；已有决议原样返回，绝不改写。"""
+    day = biz_date or _today()
+    row = get_seal_routing(conn, day)
+    if row is not None:
+        return row
+    conn.execute(
+        """INSERT INTO seal_routing_ledger(biz_date,path,path_label,chosen_by,note,created_at)
+           VALUES (?,?,?,?,?,?)""",
+        (
+            day,
+            SEAL_ROUTING_PATH,
+            SEAL_ROUTING_LABEL,
+            actor,
+            "默认口径：封口进行中新到只进旁路暂存，正式窗内零增",
+            datetime_now(),
+        ),
+    )
+    return get_seal_routing(conn, day)
+
+
+def datetime_now() -> str:
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")
+
+
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS users(
   username TEXT PRIMARY KEY,
@@ -132,6 +215,26 @@ CREATE TABLE IF NOT EXISTS reject_slips(
   amount REAL NOT NULL,
   reason TEXT NOT NULL,
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS seal_routing_ledger(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  biz_date TEXT UNIQUE NOT NULL,
+  path TEXT NOT NULL,
+  path_label TEXT NOT NULL,
+  chosen_by TEXT NOT NULL,
+  note TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS seal_ledger(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  window_id INTEGER NOT NULL,
+  seal_token TEXT NOT NULL,
+  status TEXT NOT NULL,
+  snapshot_count INTEGER NOT NULL DEFAULT 0,
+  held_count INTEGER NOT NULL DEFAULT 0,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  actor TEXT NOT NULL
 );
 """
 
@@ -255,6 +358,8 @@ def init_db() -> None:
         conn.executescript(SCHEMA)
         ensure_users(conn)
         seed_if_empty(conn)
+        # 封口分流册当天必须有册可循：初始化即落当天口径，之后写路径只读不改
+        ensure_seal_routing(conn)
         conn.commit()
 
 

@@ -9,6 +9,7 @@ class EventIn(BaseModel):
     biz_key: str
     event_ts: str
     amount: float = Field(gt=-1e12)
+    fail_simulate: bool = False
 
 
 class WindowCreateIn(BaseModel):

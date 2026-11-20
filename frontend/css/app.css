@@ -132,6 +132,7 @@ input, select {
 }
 .late { color: var(--late); font-weight: 700; }
 .ok { color: var(--ok); font-weight: 700; }
+.sealing { color: #7c3aed; font-weight: 700; }
 .stat-row {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

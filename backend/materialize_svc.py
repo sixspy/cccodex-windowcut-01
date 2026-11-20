@@ -35,6 +35,11 @@ def materialize(
                    FROM events WHERE window_id=? AND disposition='窗内'""",
                 (wid,),
             ).fetchone()
+            held = conn.execute(
+                """SELECT COUNT(*) c, COALESCE(SUM(amount),0) s FROM hold_staging
+                   WHERE window_id=? AND status='待放行'""",
+                (wid,),
+            ).fetchone()
             partition = body.partition_key or f"{w['name']}-g{w['generation']}"
             if body.fail_simulate:
                 write_audit(
@@ -56,13 +61,22 @@ def materialize(
                 user,
                 "materialize_ok",
                 str(wid),
-                {"row_count": rows["c"], "total_amount": rows["s"], "partition": partition},
+                {
+                    "row_count": rows["c"],
+                    "total_amount": rows["s"],
+                    "partition": partition,
+                    # 五处同态：物化只算正式窗内，旁路待放行单独披露
+                    "hold_pending_count": held["c"],
+                    "hold_pending_amount": held["s"],
+                },
             )
             conn.commit()
             return {
                 "row_count": rows["c"],
                 "total_amount": rows["s"],
                 "partition_key": partition,
+                "hold_pending_count": held["c"],
+                "hold_pending_amount": held["s"],
             }
         finally:
             release(conn, lock_key, user)

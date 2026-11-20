@@ -38,6 +38,24 @@
 - 窗重开作废重算 vs 增量补丁合并
 - 切版旁路暂存 vs 开始瞬间拒收
 
+## 封口分流册（本仓定稿口径）
+
+本仓择定 **甲·旁路暂存**，当天一锤定音，禁止改口：
+
+- 关窗两段式：`开启 → 封口中 → 已关闭`；封口中可续跑收口。
+- 封口进行中新到事件只写 `hold_staging`（状态 `待放行`），正式 `events` 零增；
+  暂存失败与封口态同事务回滚，不留半成品。
+- 封口期不得混用拒收路径；写路径与册定口径不符即拒写并记审计 `封口偏了`。
+- 两路抢写同一窗口共用 `window:{id}` 窗锁，后到只记 `contention_log` + 审计。
+- 五处同态：`hold` 列表、正式事件、拒收凭证、物化对账、审计；对账接口
+  单独披露 `hold_pending` 与 `seal_ledger`，物化只算正式窗内合计。
+
+相关接口：`GET /api/seal-routing`、`POST /api/seal-routing`、
+`GET /api/seal-ledger`。表：`seal_routing_ledger`、`seal_ledger`。
+
+回归用例：`tests/test_seal_routing.py`（封口泄漏、双人抢关争用、暂存失败回滚、
+五处同态、改口拒写）。
+
 ## 启动（一键）
 
 ```powershell

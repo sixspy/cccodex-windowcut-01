@@ -19,23 +19,35 @@ class LockIn(BaseModel):
 
 def try_acquire(conn, lock_key: str, holder: str) -> bool:
     now = datetime.now().isoformat(timespec="seconds")
+    # INSERT OR IGNORE 让 SQLite 主键唯一性兜住并发：后到者等前者提交后拿到 0 行
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO window_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
+        (lock_key, holder, now),
+    )
+    if cur.rowcount == 1:
+        return True
     row = conn.execute(
         "SELECT holder FROM window_locks WHERE lock_key=?", (lock_key,)
     ).fetchone()
-    if row is None:
-        conn.execute(
-            "INSERT INTO window_locks(lock_key,holder,acquired_at) VALUES (?,?,?)",
-            (lock_key, holder, now),
-        )
-        return True
-    if row["holder"] == holder:
-        return True
+    return bool(row) and row["holder"] == holder
+
+
+def record_contention(conn, lock_key: str, holder: str, holder_before: str) -> None:
+    """争用必须落库：先写 contention_log 与审计，再允许抛 409。"""
+    now = datetime.now().isoformat(timespec="seconds")
     conn.execute(
         """INSERT INTO contention_log(lock_key,actor,action,detail,created_at)
            VALUES (?,?,?,?,?)""",
-        (lock_key, holder, "争用", f"持有者={row['holder']}", now),
+        (lock_key, holder, "争用", f"持有者={holder_before}", now),
     )
-    return False
+    write_audit(
+        conn,
+        holder,
+        "lock_contention",
+        lock_key,
+        {"holder_in_place": holder_before},
+        created_at=now,
+    )
 
 
 def release(conn, lock_key: str, holder: str) -> None:
@@ -46,8 +58,19 @@ def release(conn, lock_key: str, holder: str) -> None:
 
 
 def require_lock(conn, lock_key: str, holder: str) -> None:
-    if not try_acquire(conn, lock_key, holder):
-        raise HTTPException(409, "争用：后到只记争用，不写业务")
+    """占窗锁。约定：须在业务写之前调用，本函数会提交一次事务。
+
+    占锁成功先落库，让并发方看得见；争用时只记争用与审计，不写业务。
+    """
+    if try_acquire(conn, lock_key, holder):
+        conn.commit()
+        return
+    row = conn.execute(
+        "SELECT holder FROM window_locks WHERE lock_key=?", (lock_key,)
+    ).fetchone()
+    record_contention(conn, lock_key, holder, row["holder"] if row else "未知")
+    conn.commit()
+    raise HTTPException(409, "争用：后到只记争用，不写业务")
 
 
 @router.get("/api/locks")
@@ -75,17 +98,19 @@ def acquire_lock(body: LockIn, authorization: AuthHeader = None):
     user = require_user(authorization)
     with connect() as conn:
         ok = try_acquire(conn, body.lock_key, user)
-        write_audit(
-            conn,
-            user,
-            "lock_acquire" if ok else "lock_contention",
-            body.lock_key,
-            {"ok": ok},
-        )
-        conn.commit()
         if not ok:
+            row = conn.execute(
+                "SELECT holder FROM window_locks WHERE lock_key=?", (body.lock_key,)
+            ).fetchone()
+            record_contention(
+                conn, body.lock_key, user, row["holder"] if row else "未知"
+            )
+            conn.commit()
             raise HTTPException(409, "争用：后到只记争用")
+        write_audit(conn, user, "lock_acquire", body.lock_key, {"ok": True})
+        conn.commit()
         return {"ok": True, "lock_key": body.lock_key, "holder": user}
+
 
 
 @router.post("/api/locks/release")

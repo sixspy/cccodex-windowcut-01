@@ -28,6 +28,7 @@ createApp({
     const contention = ref([]);
     const locks = ref([]);
     const holds = ref([]);
+    const routing = ref({});
     const dash = ref({});
     const form = ref({
       window_name: "W-1102",
@@ -112,6 +113,8 @@ createApp({
       const d = await api.get("/api/dashboard");
       if (d === null) return;
       dash.value = d.body || {};
+      const rt = await api.get("/api/seal-routing");
+      if (rt !== null) routing.value = rt.body || {};
       if (windows.value.length) {
         const q = await api.get("/api/reconcile/" + windows.value[0].id);
         if (q === null) return;
@@ -208,6 +211,7 @@ createApp({
       contention,
       locks,
       holds,
+      routing,
       dash,
       form,
       holdForm,

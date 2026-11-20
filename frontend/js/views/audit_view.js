@@ -27,17 +27,19 @@ export const auditViewTemplate = `
       </tr>
     </tbody>
   </table>
-  <h2 style="margin-top:16px">旁路暂存</h2>
+  <h2 style="margin-top:16px">旁路暂存（封口中窗口）</h2>
+  <p class="muted">只受理封口进行中的窗口；封口期内正式窗内零增，暂存状态待放行。</p>
   <label>窗口</label><input v-model="holdForm.window_name"/>
   <label>业务键</label><input v-model="holdForm.biz_key"/>
   <label>时间</label><input v-model="holdForm.event_ts"/>
   <label>金额</label><input type="number" v-model.number="holdForm.amount"/>
   <button class="primary" @click="createHold">写入暂存</button>
+  <p class="muted">待放行 {{holds.length}} 笔（状态须为「待放行」才算封口期拦截成功）</p>
   <table>
-    <thead><tr><th>ID</th><th>键</th><th>金额</th><th>状态</th></tr></thead>
+    <thead><tr><th>ID</th><th>窗口</th><th>键</th><th>金额</th><th>状态</th></tr></thead>
     <tbody>
       <tr v-for="h in holds" :key="'h'+h.id">
-        <td>{{h.id}}</td><td>{{h.biz_key}}</td><td>{{h.amount}}</td><td>{{h.status}}</td>
+        <td>{{h.id}}</td><td>{{h.window_name}}</td><td>{{h.biz_key}}</td><td>{{h.amount}}</td><td>{{h.status}}</td>
       </tr>
     </tbody>
   </table>
